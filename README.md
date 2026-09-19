@@ -109,6 +109,34 @@ The charm supports integrations with ingress/proxy services using the `ingress` 
 
 The scenario described above is demonstrated [in the integration tests](./tests/integration/test_ingress.py).
 
+### Sending charm traces to Tempo
+
+The charm is instrumented with [`ops[tracing]`](https://canonical.com/juju/docs/ops/latest/howto/trace-your-charm/)
+and can send traces of its own hook execution to a tracing backend over the
+`charm-tracing` relation. Both tracing relations are optional: without them the
+charm runs exactly as before, buffering traces locally until a destination
+appears.
+
+```bash
+# Deploy the charms
+❯ juju deploy ubuntu-manpages
+❯ juju deploy tempo-coordinator-k8s --trust
+
+# Create the integration
+❯ juju integrate ubuntu-manpages:charm-tracing tempo-coordinator-k8s:tracing
+```
+
+To send traces over HTTPS, also integrate `receive-ca-cert` with an application
+that provides the `certificate_transfer` interface, so the charm can validate
+the tracing endpoint's certificate:
+
+```bash
+❯ juju integrate ubuntu-manpages:receive-ca-cert <ca-provider>
+```
+
+Note that this traces the *charm*, not the manpages workload; the Go
+application is not instrumented.
+
 ### Deployment requirements
 
 The charm runs without root privileges. Its workload runs as UID/GID `584792`

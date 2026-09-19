@@ -104,6 +104,10 @@ commands in `CONTRIBUTING.md` when the change warrants them. Packaging checks (`
   `src/manpages.py` unless a clearer abstraction is needed.
 - Use `ops.testing` for isolated charm behavior. Reserve `tests/integration/` for behavior that
   genuinely needs Juju or related applications.
+- The charm is traced via `ops[tracing]`. Ops already instruments hook commands and Pebble calls,
+  so add a custom span only around work it cannot see — direct HTTP requests, subprocesses, or
+  long-running computation. Import `ops_tracing` rather than reaching for `ops.tracing`, which is
+  typed as optional and fails `ty`. Assert on spans through `Context.trace_data`.
 
 ### Templates and browser code
 

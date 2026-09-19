@@ -11,10 +11,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import opentelemetry.trace
 import ops
 from ops.pebble import APIError, ConnectionError, PathError, ProtocolError
 
 logger = logging.getLogger(__name__)
+tracer = opentelemetry.trace.get_tracer(__name__)
 
 WWW_DIR = Path("/app") / "www"
 PORT = 8080
@@ -149,21 +151,28 @@ class Manpages:
 
     def _fetch_health_error(self) -> str:
         """Query the admin healthz endpoint for the specific error."""
-        try:
-            resp = urllib.request.urlopen(f"http://localhost:{ADMIN_PORT}/_/healthz", timeout=5)
-            body = resp.read().decode("utf-8").strip()
-            data = json.loads(body)
-            return data.get("error", "unhealthy")
-        except urllib.error.HTTPError as e:
-            # 503 response — read the JSON body for the error detail.
+        # Ops instruments hook commands and Pebble calls, but not this: it is a
+        # direct HTTP request from the charm to the workload's admin listener.
+        with tracer.start_as_current_span("fetch-health-error") as span:
             try:
-                body = e.read().decode("utf-8").strip()
+                resp = urllib.request.urlopen(
+                    f"http://localhost:{ADMIN_PORT}/_/healthz", timeout=5
+                )
+                body = resp.read().decode("utf-8").strip()
                 data = json.loads(body)
                 return data.get("error", "unhealthy")
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                return "unhealthy"
-        except Exception:
-            return "health check failed"
+            except urllib.error.HTTPError as e:
+                # 503 response — read the JSON body for the error detail.
+                span.add_event("healthz-http-error", {"status": e.code})
+                try:
+                    body = e.read().decode("utf-8").strip()
+                    data = json.loads(body)
+                    return data.get("error", "unhealthy")
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return "unhealthy"
+            except Exception:
+                span.add_event("healthz-unreachable")
+                return "health check failed"
 
     @property
     def updating(self) -> bool:
