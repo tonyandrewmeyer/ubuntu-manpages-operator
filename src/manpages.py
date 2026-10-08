@@ -11,10 +11,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import opentelemetry.trace
 import ops
 from ops.pebble import APIError, ConnectionError, PathError, ProtocolError
 
 logger = logging.getLogger(__name__)
+tracer = opentelemetry.trace.get_tracer("ubuntu-manpages")
 
 WWW_DIR = Path("/app") / "www"
 PORT = 8080
@@ -149,6 +151,10 @@ class Manpages:
 
     def _fetch_health_error(self) -> str:
         """Query the admin healthz endpoint for the specific error."""
+        with tracer.start_as_current_span("fetch-health-error"):
+            return self._read_health_error()
+
+    def _read_health_error(self) -> str:
         try:
             resp = urllib.request.urlopen(f"http://localhost:{ADMIN_PORT}/_/healthz", timeout=5)
             body = resp.read().decode("utf-8").strip()

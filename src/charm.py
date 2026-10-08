@@ -8,6 +8,7 @@ import logging
 import socket
 
 import ops
+import ops_tracing
 from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
 from ops.pebble import APIError, ConnectionError, ProtocolError
 
@@ -21,6 +22,11 @@ class ManpagesCharm(ops.CharmBase):
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
+        self._tracing = ops_tracing.Tracing(
+            self,
+            tracing_relation_name="charm-tracing",
+            ca_relation_name="receive-ca-cert",
+        )
         self._container = self.unit.get_container("manpages")
         self._manpages = Manpages(self._container)
 

@@ -14,7 +14,15 @@ import pytest
 import yaml
 from ops import BlockedStatus
 from ops.pebble import CheckLevel, CheckStatus, Layer, ServiceStatus
-from ops.testing import ActiveStatus, CheckInfo, Context, MaintenanceStatus, State, TCPPort
+from ops.testing import (
+    ActiveStatus,
+    CheckInfo,
+    Context,
+    MaintenanceStatus,
+    Relation,
+    State,
+    TCPPort,
+)
 from scenario import Container
 
 from charm import ManpagesCharm
@@ -314,3 +322,62 @@ def test_update_status_active_when_ready_up(charm):
     result = ctx.run(ctx.on.update_status(), state)
 
     assert result.unit_status == ActiveStatus()
+
+
+def _failing_ready_check_state(*relations):
+    check_info = CheckInfo(
+        "ready",
+        level=CheckLevel.UNSET,
+        failures=3,
+        status=CheckStatus.DOWN,
+        threshold=3,
+    )
+    container = Container(
+        name="manpages",
+        can_connect=True,
+        layers={"manpages": CHECKS_LAYER},
+        check_infos={check_info},
+    )
+    state = State(containers=[container], config={"releases": "noble"}, relations=relations)
+    return container, check_info, state
+
+
+def test_tracing_records_ops_main_without_a_tracing_relation(charm):
+    ctx = Context(charm)
+    container = Container(name="manpages", can_connect=True)
+
+    ctx.run(ctx.on.update_status(), State(containers=[container]))
+
+    assert any(s.name == "ops.main" for s in ctx.trace_data)
+
+
+@patch("manpages.Manpages._read_health_error", return_value="low disk space on manpages storage")
+def test_tracing_health_error_span_is_under_ops_main(mock_health, charm):
+    ctx = Context(charm)
+    container, check_info, state = _failing_ready_check_state()
+
+    ctx.run(ctx.on.pebble_check_failed(container, info=check_info), state)
+
+    spans_by_id = {s.context.span_id: s for s in ctx.trace_data}
+    span = next(s for s in ctx.trace_data if s.name == "fetch-health-error")
+    assert span.instrumentation_scope is not None
+    assert span.instrumentation_scope.name == "ubuntu-manpages"
+    ancestors = []
+    parent = span.parent
+    while parent is not None:
+        ancestor = spans_by_id[parent.span_id]
+        ancestors.append(ancestor.name)
+        parent = ancestor.parent
+    assert "ops.main" in ancestors
+
+
+@patch("manpages.Manpages._read_health_error", return_value="low disk space on manpages storage")
+def test_tracing_relation_does_not_change_status(mock_health, charm):
+    statuses = []
+    for relations in ((), (Relation("charm-tracing"),)):
+        ctx = Context(charm)
+        container, check_info, state = _failing_ready_check_state(*relations)
+        result = ctx.run(ctx.on.pebble_check_failed(container, info=check_info), state)
+        statuses.append(result.unit_status)
+
+    assert statuses == [MaintenanceStatus("low disk space on manpages storage")] * 2
